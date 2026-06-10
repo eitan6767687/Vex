@@ -1,0 +1,535 @@
+print("[Vex SpeedBypass] script started")
+
+repeat task.wait() until game:IsLoaded()
+print("[Vex SpeedBypass] game loaded")
+
+local UIS           = game:GetService("UserInputService")
+local HS            = game:GetService("HttpService")
+local CoreGui       = game:GetService("CoreGui")
+local TS            = game:GetService("TweenService")
+local NetworkClient = game:GetService("NetworkClient")
+local Players       = game:GetService("Players")
+
+local LocalPlayer = Players.LocalPlayer
+if not LocalPlayer then
+    print("[Vex SpeedBypass] waiting for LocalPlayer...")
+    repeat task.wait(0.1) until Players.LocalPlayer
+    LocalPlayer = Players.LocalPlayer
+end
+print("[Vex SpeedBypass] LocalPlayer: " .. LocalPlayer.Name)
+
+local pgui = LocalPlayer:WaitForChild("PlayerGui", 10)
+if not pgui then
+    warn("[Vex SpeedBypass] PlayerGui never appeared - aborting")
+    return
+end
+print("[Vex SpeedBypass] PlayerGui ready")
+
+for _, n in pairs({"RainySpeedBypass", "VexSpeedBypassStandalone", "VexSpeedBypassGui"}) do
+    pcall(function() local old = CoreGui:FindFirstChild(n); if old then old:Destroy() end end)
+    pcall(function() local oldP = pgui:FindFirstChild(n); if oldP then oldP:Destroy() end end)
+end
+
+local ConfigFile = "VexSpeedBypass.json"
+local Config = {
+    Keybind="V", PCPower=97000, MobilePower=72000, Mode="PC", SpamDelay=0.125,
+}
+local function SaveConfig()
+    if writefile then pcall(function() writefile(ConfigFile, HS:JSONEncode(Config)) end) end
+end
+local function LoadConfig()
+    if isfile and isfile(ConfigFile) then
+        local ok, data = pcall(function() return HS:JSONDecode(readfile(ConfigFile)) end)
+        if ok and data then
+            if type(data.Keybind)=="string" then Config.Keybind=data.Keybind end
+            if type(data.PCPower)=="number" then Config.PCPower=math.clamp(data.PCPower,10000,150000) end
+            if type(data.MobilePower)=="number" then Config.MobilePower=math.clamp(data.MobilePower,10000,100000) end
+            if type(data.Mode)=="string" and (data.Mode=="PC" or data.Mode=="Mobile") then Config.Mode=data.Mode end
+            if type(data.SpamDelay)=="number" then Config.SpamDelay=(data.SpamDelay==0.125 or data.SpamDelay==0.12) and data.SpamDelay or 0.125 end
+        end
+    end
+end
+LoadConfig()
+
+local DEPTH = 186
+local function buildBomb(power)
+    local maintable={}; local spammedtable={}; table.insert(spammedtable,{})
+    local z=spammedtable[1]
+    for _=1,DEPTH do local t={}; table.insert(z,t); z=t end
+    local maxRep=math.floor(power/(DEPTH+2))
+    for _=1,maxRep do table.insert(maintable,spammedtable) end
+    return maintable
+end
+local function getVerName(d) return d==0.125 and "v1" or "v2" end
+
+-- Black & White color scheme
+local SB_BG=Color3.fromRGB(8,8,8); local SB_BG2=Color3.fromRGB(14,14,14)
+local SB_CARD=Color3.fromRGB(20,20,20); local SB_CARD2=Color3.fromRGB(28,28,28)
+local SB_ACCENT=Color3.fromRGB(255,255,255); local SB_ACCENT_HOT=Color3.fromRGB(220,220,220)
+local SB_ACCENT_LT=Color3.fromRGB(255,255,255); local SB_ACCENT_DIM=Color3.fromRGB(120,120,120)
+local SB_ACCENT_DK=Color3.fromRGB(60,60,60); local SB_WHITE=Color3.fromRGB(255,255,255)
+local SB_DIM=Color3.fromRGB(140,140,140)
+
+local function _corner(p,r) local c=Instance.new("UICorner",p); c.CornerRadius=UDim.new(0,r or 8); return c end
+local function _stroke(p,col,t) local s=Instance.new("UIStroke",p); s.Color=col; s.Thickness=t or 1.2; return s end
+
+-- ============================================================
+-- SCREENGUI: simplest reliable parent (PlayerGui first)
+-- ============================================================
+local gui = Instance.new("ScreenGui")
+gui.Name = "VexSpeedBypassStandalone"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.DisplayOrder = 99999
+gui.Enabled = true
+
+local parented = false
+local ok1, err1 = pcall(function() gui.Parent = pgui end)
+if ok1 and gui.Parent then
+    parented = true
+    print("[Vex SpeedBypass] parented to PlayerGui")
+end
+
+if not parented then
+    print("[Vex SpeedBypass] PlayerGui failed (" .. tostring(err1) .. "), trying CoreGui...")
+    pcall(function() if syn and syn.protect_gui then syn.protect_gui(gui) end end)
+    local ok2, err2 = pcall(function() gui.Parent = CoreGui end)
+    if ok2 and gui.Parent then
+        parented = true
+        print("[Vex SpeedBypass] parented to CoreGui")
+    else
+        warn("[Vex SpeedBypass] CoreGui also failed: " .. tostring(err2))
+    end
+end
+
+if not parented then
+    warn("[Vex SpeedBypass] FATAL: could not parent GUI - aborting")
+    return
+end
+
+local PW, PH = 220, 270
+local main = Instance.new("Frame", gui)
+main.Name = "Main"
+main.Size = UDim2.new(0, PW, 0, PH)
+main.Position = UDim2.new(0.5, -PW/2, 0.5, -PH/2)
+main.BackgroundColor3 = SB_BG
+main.BorderSizePixel = 0
+main.Active = true
+main.Visible = true
+main.ZIndex = 10
+_corner(main, 14)
+print("[Vex SpeedBypass] main panel created")
+
+local bgGrad = Instance.new("UIGradient", main)
+bgGrad.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(18,18,18)),
+    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(10,10,10)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(22,22,22)),
+})
+bgGrad.Rotation = 135
+
+local borderGlow = _stroke(main, SB_ACCENT_HOT, 1.5)
+borderGlow.Transparency = 0.15
+local strokeGrad = Instance.new("UIGradient", borderGlow)
+strokeGrad.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(80,80,80)),
+    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(200,200,200)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(80,80,80)),
+})
+task.spawn(function()
+    while gui.Parent do
+        for r=0,360,3 do
+            if not gui.Parent then break end
+            strokeGrad.Rotation = r
+            task.wait(0.045)
+        end
+    end
+end)
+
+local gloss = Instance.new("Frame", main)
+gloss.Size = UDim2.new(1,-4,0.5,0); gloss.Position = UDim2.new(0,2,0,2)
+gloss.BackgroundColor3 = SB_ACCENT_LT; gloss.BackgroundTransparency = 0.97
+gloss.BorderSizePixel = 0; gloss.ZIndex = 11
+_corner(gloss, 12)
+local glossGrad = Instance.new("UIGradient", gloss)
+glossGrad.Color = ColorSequence.new(SB_ACCENT_LT)
+glossGrad.Transparency = NumberSequence.new({
+    NumberSequenceKeypoint.new(0, 0.88), NumberSequenceKeypoint.new(1, 1),
+})
+glossGrad.Rotation = 90
+
+local rainClip = Instance.new("Frame", main)
+rainClip.Size = UDim2.new(1,0,1,0); rainClip.BackgroundTransparency = 1
+rainClip.ClipsDescendants = true; rainClip.ZIndex = 12
+_corner(rainClip, 14)
+task.spawn(function()
+    while rainClip and rainClip.Parent do
+        local d = Instance.new("Frame", rainClip)
+        d.BackgroundColor3 = Color3.fromRGB(180,180,180)
+        d.BackgroundTransparency = math.random(60,85)/100
+        d.BorderSizePixel = 0
+        d.Size = UDim2.new(0,1,0,math.random(8,16))
+        d.Position = UDim2.new(math.random(0,100)/100,0,0,-20)
+        d.ZIndex = 12
+        _corner(d, 2)
+        local dur = math.random(8,18)/10
+        local t = TS:Create(d, TweenInfo.new(dur, Enum.EasingStyle.Linear),
+            {Position = UDim2.new(d.Position.X.Scale,0,1,20)})
+        t:Play(); t.Completed:Connect(function() d:Destroy() end)
+        task.wait(0.1)
+    end
+end)
+
+do
+    local dragging, dragStart, panelStart, activeInp
+    main.InputBegan:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1
+        or inp.UserInputType == Enum.UserInputType.Touch then
+            dragging = true; dragStart = inp.Position; panelStart = main.Position; activeInp = inp
+        end
+    end)
+    UIS.InputEnded:Connect(function(inp)
+        if inp == activeInp then dragging = false; activeInp = nil end
+    end)
+    UIS.InputChanged:Connect(function(inp)
+        if not dragging then return end
+        if inp.UserInputType == Enum.UserInputType.MouseMovement
+        or inp.UserInputType == Enum.UserInputType.Touch then
+            local d = inp.Position - dragStart
+            main.Position = UDim2.new(panelStart.X.Scale, panelStart.X.Offset+d.X,
+                                      panelStart.Y.Scale, panelStart.Y.Offset+d.Y)
+        end
+    end)
+end
+
+local hdr = Instance.new("Frame", main)
+hdr.Size = UDim2.new(1,0,0,40); hdr.BackgroundColor3 = SB_BG2
+hdr.BackgroundTransparency = 0.2; hdr.BorderSizePixel = 0; hdr.ZIndex = 13
+_corner(hdr, 14)
+local hdrMask = Instance.new("Frame", hdr)
+hdrMask.Size = UDim2.new(1,0,0,14); hdrMask.Position = UDim2.new(0,0,1,-14)
+hdrMask.BackgroundColor3 = SB_BG2; hdrMask.BackgroundTransparency = 0.2
+hdrMask.BorderSizePixel = 0; hdrMask.ZIndex = 13
+
+local hLine = Instance.new("Frame", main)
+hLine.Size = UDim2.new(1,-20,0,1); hLine.Position = UDim2.new(0,10,0,40)
+hLine.BackgroundColor3 = SB_ACCENT; hLine.BorderSizePixel = 0; hLine.ZIndex = 14
+local hlGrad = Instance.new("UIGradient", hLine)
+hlGrad.Transparency = NumberSequence.new({
+    NumberSequenceKeypoint.new(0,1), NumberSequenceKeypoint.new(0.2,0.3),
+    NumberSequenceKeypoint.new(0.5,0), NumberSequenceKeypoint.new(0.8,0.3),
+    NumberSequenceKeypoint.new(1,1),
+})
+
+local logoFrame = Instance.new("Frame", hdr)
+logoFrame.Size = UDim2.new(0,24,0,24); logoFrame.Position = UDim2.new(0,8,0.5,-12)
+logoFrame.BackgroundColor3 = SB_BG; logoFrame.BorderSizePixel = 0; logoFrame.ZIndex = 14
+_corner(logoFrame, 999)
+local logoStroke = _stroke(logoFrame, SB_ACCENT_HOT, 1.3)
+logoStroke.Transparency = 0.1
+local logo = Instance.new("ImageLabel", logoFrame)
+logo.Size = UDim2.new(1,-4,1,-4); logo.Position = UDim2.new(0,2,0,2)
+logo.BackgroundTransparency = 1
+logo.Image = "rbxassetid://86830663844081"
+logo.ScaleType = Enum.ScaleType.Fit; logo.ZIndex = 15
+_corner(logo, 999)
+task.spawn(function()
+    while gui.Parent do
+        TS:Create(logoStroke, TweenInfo.new(1.4, Enum.EasingStyle.Sine), {Color=SB_ACCENT_LT, Transparency=0.3}):Play()
+        task.wait(1.4)
+        if not gui.Parent then break end
+        TS:Create(logoStroke, TweenInfo.new(1.4, Enum.EasingStyle.Sine), {Color=SB_ACCENT_HOT, Transparency=0.1}):Play()
+        task.wait(1.4)
+    end
+end)
+
+local title = Instance.new("TextLabel", hdr)
+title.Size = UDim2.new(0,130,0,14); title.Position = UDim2.new(0,38,0,8)
+title.BackgroundTransparency = 1; title.Text = "VEX SPEED"
+title.TextColor3 = SB_ACCENT_LT; title.Font = Enum.Font.GothamBlack
+title.TextSize = 13; title.TextXAlignment = Enum.TextXAlignment.Left; title.ZIndex = 15
+
+local subtitle = Instance.new("TextLabel", hdr)
+subtitle.Size = UDim2.new(0,130,0,10); subtitle.Position = UDim2.new(0,38,0,22)
+subtitle.BackgroundTransparency = 1; subtitle.Text = "PREMIUM BYPASS"
+subtitle.TextColor3 = SB_ACCENT_DIM; subtitle.Font = Enum.Font.GothamBold
+subtitle.TextSize = 8; subtitle.TextXAlignment = Enum.TextXAlignment.Left; subtitle.ZIndex = 15
+
+local statusBadge = Instance.new("Frame", hdr)
+statusBadge.Size = UDim2.new(0,36,0,18); statusBadge.Position = UDim2.new(1,-44,0.5,-9)
+statusBadge.BackgroundColor3 = SB_CARD; statusBadge.BorderSizePixel = 0; statusBadge.ZIndex = 14
+_corner(statusBadge, 8)
+local statusDot = Instance.new("Frame", statusBadge)
+statusDot.Size = UDim2.new(0,8,0,8); statusDot.Position = UDim2.new(0.5,-4,0.5,-4)
+statusDot.BackgroundColor3 = Color3.fromRGB(70,70,70)
+statusDot.BorderSizePixel = 0; statusDot.ZIndex = 15
+_corner(statusDot, 999)
+
+local content = Instance.new("Frame", main)
+content.Size = UDim2.new(1,-16,1,-50); content.Position = UDim2.new(0,8,0,46)
+content.BackgroundTransparency = 1; content.ZIndex = 13
+local cList = Instance.new("UIListLayout", content)
+cList.SortOrder = Enum.SortOrder.LayoutOrder; cList.Padding = UDim.new(0,5)
+
+local function mkRow(h)
+    local f = Instance.new("Frame", content)
+    f.Size = UDim2.new(1,0,0,h or 28); f.BackgroundColor3 = SB_CARD
+    f.BackgroundTransparency = 0.15; f.BorderSizePixel = 0; f.ZIndex = 14
+    f.LayoutOrder = #content:GetChildren()
+    _corner(f, 7); return f
+end
+local function mkLbl(p, txt, fs, col)
+    local l = Instance.new("TextLabel", p)
+    l.BackgroundTransparency = 1; l.Text = txt
+    l.Font = Enum.Font.GothamBold; l.TextSize = fs or 10
+    l.TextColor3 = col or SB_WHITE
+    l.TextXAlignment = Enum.TextXAlignment.Left; l.ZIndex = 15
+    return l
+end
+
+local toggleRow = mkRow(40)
+toggleRow.BackgroundColor3 = SB_CARD2
+local toggleBtn = Instance.new("TextButton", toggleRow)
+toggleBtn.Size = UDim2.new(1,0,1,0); toggleBtn.BackgroundTransparency = 1
+toggleBtn.Text = ""; toggleBtn.AutoButtonColor = false; toggleBtn.ZIndex = 16
+local toggleLbl = mkLbl(toggleRow, "◉  DISABLED", 13, SB_DIM)
+toggleLbl.Size = UDim2.new(1,-10,1,0); toggleLbl.Position = UDim2.new(0,14,0,0)
+local toggleStroke = _stroke(toggleRow, SB_ACCENT_DK, 1.2)
+
+local modeRow = mkRow(28)
+local mLbl = mkLbl(modeRow, "Mode", 9, SB_DIM)
+mLbl.Size = UDim2.new(0,36,1,0); mLbl.Position = UDim2.new(0,8,0,0)
+local btnPC = Instance.new("TextButton", modeRow)
+btnPC.Size = UDim2.new(0,46,0,18); btnPC.Position = UDim2.new(0,48,0.5,-9)
+btnPC.BackgroundColor3 = SB_CARD; btnPC.BorderSizePixel = 0; btnPC.Text = "PC"
+btnPC.TextColor3 = SB_ACCENT; btnPC.Font = Enum.Font.GothamBlack; btnPC.TextSize = 9; btnPC.ZIndex = 16
+btnPC.AutoButtonColor = false
+_corner(btnPC, 5); local pcS = _stroke(btnPC, SB_ACCENT, 1)
+
+local btnMob = Instance.new("TextButton", modeRow)
+btnMob.Size = UDim2.new(0,54,0,18); btnMob.Position = UDim2.new(0,98,0.5,-9)
+btnMob.BackgroundColor3 = SB_CARD; btnMob.BorderSizePixel = 0; btnMob.Text = "MOBILE"
+btnMob.TextColor3 = SB_DIM; btnMob.Font = Enum.Font.GothamBold; btnMob.TextSize = 9; btnMob.ZIndex = 16
+btnMob.AutoButtonColor = false
+_corner(btnMob, 5); local mobS = _stroke(btnMob, SB_ACCENT_DK, 1)
+
+local function updateModeBtns(mode)
+    if mode == "PC" then
+        TS:Create(btnPC, TweenInfo.new(0.12), {BackgroundColor3=SB_ACCENT_DK, TextColor3=SB_ACCENT_LT}):Play(); pcS.Color = SB_ACCENT
+        TS:Create(btnMob, TweenInfo.new(0.12), {BackgroundColor3=SB_CARD, TextColor3=SB_DIM}):Play(); mobS.Color = SB_ACCENT_DK
+    else
+        TS:Create(btnPC, TweenInfo.new(0.12), {BackgroundColor3=SB_CARD, TextColor3=SB_DIM}):Play(); pcS.Color = SB_ACCENT_DK
+        TS:Create(btnMob, TweenInfo.new(0.12), {BackgroundColor3=SB_ACCENT_DK, TextColor3=SB_ACCENT_LT}):Play(); mobS.Color = SB_ACCENT
+    end
+end
+
+local powerRow = mkRow(28)
+local pLbl = mkLbl(powerRow, "Power", 9, SB_DIM)
+pLbl.Size = UDim2.new(0,36,1,0); pLbl.Position = UDim2.new(0,8,0,0)
+local powerInput = Instance.new("TextBox", powerRow)
+powerInput.Size = UDim2.new(0,84,0,18); powerInput.Position = UDim2.new(0,48,0.5,-9)
+powerInput.BackgroundColor3 = SB_BG2; powerInput.BorderSizePixel = 0
+powerInput.Text = tostring(Config.Mode=="PC" and Config.PCPower or Config.MobilePower)
+powerInput.TextColor3 = SB_ACCENT; powerInput.Font = Enum.Font.GothamBold; powerInput.TextSize = 10
+powerInput.ClearTextOnFocus = false; powerInput.ZIndex = 16
+_corner(powerInput, 5); _stroke(powerInput, SB_ACCENT_DK, 1)
+
+local presetRow = mkRow(26)
+presetRow.BackgroundTransparency = 1
+local p1 = Instance.new("TextButton", presetRow)
+p1.Size = UDim2.new(0,48,0,20); p1.Position = UDim2.new(0,0,0.5,-10)
+p1.BackgroundColor3 = SB_CARD2; p1.BorderSizePixel = 0; p1.Text = "v1"
+p1.TextColor3 = SB_ACCENT; p1.Font = Enum.Font.GothamBold; p1.TextSize = 9; p1.ZIndex = 16
+p1.AutoButtonColor = false
+_corner(p1, 5); _stroke(p1, SB_ACCENT_HOT, 1)
+local p2 = Instance.new("TextButton", presetRow)
+p2.Size = UDim2.new(0,48,0,20); p2.Position = UDim2.new(0,54,0.5,-10)
+p2.BackgroundColor3 = SB_CARD2; p2.BorderSizePixel = 0; p2.Text = "v2"
+p2.TextColor3 = SB_ACCENT; p2.Font = Enum.Font.GothamBold; p2.TextSize = 9; p2.ZIndex = 16
+p2.AutoButtonColor = false
+_corner(p2, 5); _stroke(p2, SB_ACCENT_HOT, 1)
+local verLbl = Instance.new("TextLabel", presetRow)
+verLbl.Size = UDim2.new(0,60,1,0); verLbl.Position = UDim2.new(0,108,0,0)
+verLbl.BackgroundTransparency = 1
+verLbl.Text = "  " .. getVerName(Config.SpamDelay)
+verLbl.TextColor3 = SB_DIM; verLbl.Font = Enum.Font.GothamBold; verLbl.TextSize = 10; verLbl.ZIndex = 16
+
+local kbRow = mkRow(28)
+local kLbl = mkLbl(kbRow, "Keybind", 9, SB_DIM)
+kLbl.Size = UDim2.new(0,50,1,0); kLbl.Position = UDim2.new(0,8,0,0)
+local kbBadge = Instance.new("Frame", kbRow)
+kbBadge.Size = UDim2.new(0,70,0,20); kbBadge.Position = UDim2.new(0,58,0.5,-10)
+kbBadge.BackgroundColor3 = SB_BG2; kbBadge.BorderSizePixel = 0; kbBadge.ZIndex = 16
+_corner(kbBadge, 6); _stroke(kbBadge, SB_ACCENT_HOT, 1.2)
+local kbKeyLbl = Instance.new("TextLabel", kbBadge)
+kbKeyLbl.Size = UDim2.new(0,46,1,0); kbKeyLbl.Position = UDim2.new(0,2,0,0)
+kbKeyLbl.BackgroundTransparency = 1
+kbKeyLbl.Text = "[" .. Config.Keybind .. "]"
+kbKeyLbl.Font = Enum.Font.GothamBlack; kbKeyLbl.TextSize = 11; kbKeyLbl.TextColor3 = SB_ACCENT; kbKeyLbl.ZIndex = 17
+local kbEditBtn = Instance.new("TextButton", kbBadge)
+kbEditBtn.Size = UDim2.new(0,22,1,0); kbEditBtn.Position = UDim2.new(1,-22,0,0)
+kbEditBtn.BackgroundColor3 = SB_ACCENT_DK; kbEditBtn.BorderSizePixel = 0
+kbEditBtn.Text = "✎"; kbEditBtn.TextColor3 = SB_ACCENT_LT
+kbEditBtn.Font = Enum.Font.GothamBold; kbEditBtn.TextSize = 10; kbEditBtn.ZIndex = 18
+kbEditBtn.AutoButtonColor = false
+_corner(kbEditBtn, 5)
+
+local discRow = mkRow(22)
+discRow.BackgroundColor3 = Color3.fromRGB(40,40,40); discRow.BackgroundTransparency = 0.25
+_stroke(discRow, SB_ACCENT_HOT, 1).Transparency = 0.4
+local discLbl = mkLbl(discRow, "https://discord.gg/5t2M62W8R", 10, SB_WHITE)
+discLbl.Size = UDim2.new(1,0,1,0); discLbl.TextXAlignment = Enum.TextXAlignment.Center
+local discGrad = Instance.new("UIGradient", discLbl)
+discGrad.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(180,180,180)),
+    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255,255,255)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(180,180,180)),
+})
+task.spawn(function()
+    local t=0
+    while discLbl and discLbl.Parent do
+        t = t + 0.025
+        discGrad.Offset = Vector2.new(math.sin(t)*0.5, 0)
+        task.wait(0.04)
+    end
+end)
+
+local running = false
+local bomb, spamThread
+local listeningKB = false
+
+local function setActiveVisual(on)
+    if on then
+        toggleLbl.Text = " ENABLED"; toggleLbl.TextColor3 = SB_ACCENT_LT
+        toggleStroke.Color = SB_ACCENT
+        TS:Create(toggleRow, TweenInfo.new(0.15), {BackgroundColor3=Color3.fromRGB(50,50,50)}):Play()
+        TS:Create(statusDot, TweenInfo.new(0.15), {BackgroundColor3=SB_ACCENT_HOT}):Play()
+    else
+        toggleLbl.Text = "◉  DISABLED"; toggleLbl.TextColor3 = SB_DIM
+        toggleStroke.Color = SB_ACCENT_DK
+        TS:Create(toggleRow, TweenInfo.new(0.15), {BackgroundColor3=SB_CARD2}):Play()
+        TS:Create(statusDot, TweenInfo.new(0.15), {BackgroundColor3=Color3.fromRGB(70,70,70)}):Play()
+    end
+end
+setActiveVisual(false)
+
+local function getCurrentPower() return Config.Mode=="PC" and Config.PCPower or Config.MobilePower end
+
+local function restartSpamLoop()
+    if not running then return end
+    if spamThread then pcall(function() task.cancel(spamThread) end) end
+    bomb = buildBomb(getCurrentPower())
+    local rrs = game:FindFirstChild("RobloxReplicatedStorage")
+    local remote = rrs and rrs:FindFirstChild("SetPlayerBlockList")
+    if not remote then
+        warn("[Vex SpeedBypass] SetPlayerBlockList not found - this game may not support the bypass")
+        return
+    end
+    spamThread = task.spawn(function()
+        while running do
+            if bomb then
+                pcall(function() remote:FireServer(bomb) end)
+            end
+            task.wait(Config.SpamDelay)
+        end
+    end)
+end
+
+local function Toggle()
+    running = not running
+    if running then
+        pcall(function() NetworkClient:SetOutgoingKBPSLimit(math.huge) end)
+        restartSpamLoop()
+        setActiveVisual(true)
+    else
+        if spamThread then pcall(function() task.cancel(spamThread) end) end
+        bomb = nil; spamThread = nil
+        pcall(function() NetworkClient:SetOutgoingKBPSLimit(0) end)
+        setActiveVisual(false)
+    end
+end
+
+local function SwitchMode(newMode)
+    if running then Toggle() end
+    Config.Mode = newMode
+    updateModeBtns(newMode)
+    powerInput.Text = tostring(getCurrentPower())
+    SaveConfig()
+end
+
+local function setPreset(d)
+    Config.SpamDelay = d
+    verLbl.Text = "  " .. getVerName(d)
+    SaveConfig()
+    if running then restartSpamLoop() end
+end
+
+toggleBtn.MouseButton1Click:Connect(Toggle)
+toggleBtn.MouseEnter:Connect(function()
+    TS:Create(toggleRow, TweenInfo.new(0.1), {BackgroundColor3 = running and Color3.fromRGB(70,70,70) or Color3.fromRGB(40,40,40)}):Play()
+end)
+toggleBtn.MouseLeave:Connect(function()
+    TS:Create(toggleRow, TweenInfo.new(0.1), {BackgroundColor3 = running and Color3.fromRGB(50,50,50) or SB_CARD2}):Play()
+end)
+
+btnPC.MouseButton1Click:Connect(function() SwitchMode("PC") end)
+btnMob.MouseButton1Click:Connect(function() SwitchMode("Mobile") end)
+
+p1.MouseButton1Click:Connect(function()
+    setPreset(0.125)
+    TS:Create(p1, TweenInfo.new(0.08), {BackgroundColor3=SB_ACCENT_DK}):Play()
+    task.delay(0.2, function() TS:Create(p1, TweenInfo.new(0.1), {BackgroundColor3=SB_CARD2}):Play() end)
+end)
+p2.MouseButton1Click:Connect(function()
+    setPreset(0.12)
+    TS:Create(p2, TweenInfo.new(0.08), {BackgroundColor3=SB_ACCENT_DK}):Play()
+    task.delay(0.2, function() TS:Create(p2, TweenInfo.new(0.1), {BackgroundColor3=SB_CARD2}):Play() end)
+end)
+
+powerInput.FocusLost:Connect(function()
+    local n = tonumber(powerInput.Text)
+    if n then
+        if Config.Mode == "PC" then
+            Config.PCPower = math.clamp(n, 10000, 150000); powerInput.Text = tostring(Config.PCPower)
+        else
+            Config.MobilePower = math.clamp(n, 10000, 100000); powerInput.Text = tostring(Config.MobilePower)
+        end
+    else
+        powerInput.Text = tostring(getCurrentPower())
+    end
+    SaveConfig()
+    if running then restartSpamLoop() end
+end)
+
+kbEditBtn.MouseButton1Click:Connect(function()
+    if listeningKB then return end
+    listeningKB = true
+    kbKeyLbl.Text = "[...]"
+    kbKeyLbl.TextColor3 = Color3.fromRGB(200,200,100)
+    kbEditBtn.BackgroundColor3 = Color3.fromRGB(80,80,0)
+end)
+
+UIS.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+    if listeningKB then
+        if input.UserInputType == Enum.UserInputType.Keyboard then
+            Config.Keybind = input.KeyCode.Name
+            kbKeyLbl.Text = "[" .. Config.Keybind .. "]"
+            kbKeyLbl.TextColor3 = SB_ACCENT
+            kbEditBtn.BackgroundColor3 = SB_ACCENT_DK
+            listeningKB = false
+            SaveConfig()
+        end
+    elseif input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode.Name == Config.Keybind then
+        Toggle()
+    end
+end)
+
+updateModeBtns(Config.Mode)
+powerInput.Text = tostring(getCurrentPower())
+
+main.Visible = true
+gui.Enabled = true
+
+print("[Vex SpeedBypass] UI fully loaded · " .. Config.Keybind .. " to toggle")
